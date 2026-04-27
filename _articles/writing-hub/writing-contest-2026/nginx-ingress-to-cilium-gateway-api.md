@@ -65,11 +65,7 @@ helm upgrade cilium ./cilium --namespace kube-system --reuse-values \
   --set gatewayAPI.enabled=true
 ```
 
-Cilium creates the `cilium` GatewayClass automatically and starts watching `Gateway` and `HTTPRoute` resources.
-
-In LoadBalancer mode (the default, paired with L2 Announcements), Gateway listener ports are exposed via a LoadBalancer Service — Envoy itself listens on higher ports inside the pod, and the Service maps 80/443 to those ports. No special host-port permissions are needed.
-
-If you instead enable `gatewayAPI.hostNetwork.enabled: true` to bind directly on host ports 80/443, you must also set `envoy.securityContext.capabilities.keepCapNetBindService: true` and add `NET_BIND_SERVICE` to the Envoy capabilities — otherwise the Gateway shows `Programmed=True` but Envoy silently fails to bind the privileged port after the wrapper drops capabilities.
+Cilium creates the `cilium` GatewayClass automatically and starts watching `Gateway` and `HTTPRoute` resources. Each `Gateway` you apply spawns a dedicated LoadBalancer Service (named `cilium-gateway-<name>`) that gets an IP from the L2 pool you configured in Step 1.
 
 ## Step 3: Migrate an Ingress to Gateway + HTTPRoute
 
@@ -94,11 +90,7 @@ spec:
       port: 80
 ```
 
-Two things to know:
-
-**Cross-namespace routing is built in.** With Nginx Ingress, each namespace owns its own Ingress. Gateway API lets a single shared Gateway accept routes from any namespace — explicit, auditable, and aligned with platform-vs-app team separation.
-
-**TLS secret sync is automatic but has a constraint.** Cilium syncs TLS secrets into the `cilium-secrets` namespace using the format `<source-namespace>-<secret-name>`. The source secret must exist before the Gateway is created — Cilium does not retry the sync if it is missing at creation time.
+A useful side effect: with Nginx Ingress each namespace owned its own Ingress. With Gateway API, a single shared Gateway can accept routes from any namespace — explicit, auditable, and aligned with platform-vs-app team separation.
 
 ## Step 4: cert-manager with Gateway API
 
@@ -150,13 +142,9 @@ curl -I https://n8n.example.com           # end-to-end
 
 2. **L2 interface regex must be specific.** `^bond.*` matches all bond interfaces. If you have multiple bonds on different subnets, use an exact match like `^bond-mgmt$` or you will announce LB IPs on the wrong network and external clients will not reach them.
 
-3. **LoadBalancer mode does not need `NET_BIND_SERVICE`.** Envoy listens on a high port inside the pod and the Service maps 80/443 to it. The capability is only required if you switch to `gatewayAPI.hostNetwork.enabled: true`.
+3. **cert-manager Gateway API support is off by default.** Set `config.enableGatewayAPI: true` (Helm) or the equivalent ConfigMap flag — without it, ACME challenges are created but never presented and you wait forever for a certificate that never arrives.
 
-4. **cert-manager Gateway API support is off by default.** Set `config.enableGatewayAPI: true` (Helm) or the equivalent ConfigMap flag — without it, ACME challenges are created but never presented and you wait forever for a certificate that never arrives.
-
-5. **Cilium 1.18.x requires the experimental Gateway API CRD bundle.** The stable bundle lacks `TLSRoute v1alpha2` and the operator will crash. Do not patch the CRD manually — the admission controller reverts it.
-
-6. **TLS secrets must exist before the Gateway is created.** Cilium does not retry the sync if the secret is missing at creation time. Apply secrets first, Gateway second.
+4. **Cilium 1.18.x requires the experimental Gateway API CRD bundle.** The stable bundle lacks `TLSRoute v1alpha2` and the operator will crash. Do not patch the CRD manually — the admission controller reverts it.
 
 ## References
 
